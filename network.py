@@ -141,8 +141,8 @@ class ConditionalUnet1D(nn.Module):
         """
 
         super().__init__()
-        all_dims = [input_dim] + list(down_dims)
-        start_dim = down_dims[0]
+        all_dims = [input_dim] + list(down_dims)   # [2, 256, 512, 1024]
+        start_dim = down_dims[0]                   # 256
 
         dsed = diffusion_step_embed_dim
         diffusion_step_encoder = nn.Sequential(
@@ -151,10 +151,10 @@ class ConditionalUnet1D(nn.Module):
             nn.Mish(),
             nn.Linear(dsed * 4, dsed),
         )
-        cond_dim = dsed + global_cond_dim
+        cond_dim = dsed + global_cond_dim          # 1284 = 256 + 1028
 
-        in_out = list(zip(all_dims[:-1], all_dims[1:]))
-        mid_dim = all_dims[-1]
+        in_out = list(zip(all_dims[:-1], all_dims[1:])) # [(2, 256), (256, 512), (512, 1024)]
+        mid_dim = all_dims[-1]                     # 1024
         self.mid_modules = nn.ModuleList([
             ConditionalResidualBlock1D(
                 mid_dim, mid_dim, cond_dim=cond_dim,
@@ -167,7 +167,7 @@ class ConditionalUnet1D(nn.Module):
         ])
 
         down_modules = nn.ModuleList([])
-        for ind, (dim_in, dim_out) in enumerate(in_out):
+        for ind, (dim_in, dim_out) in enumerate(in_out): # for [(2, 256), (256, 512), (512, 1024)]
             is_last = ind >= (len(in_out) - 1)
             down_modules.append(nn.ModuleList([
                 ConditionalResidualBlock1D(
@@ -180,7 +180,7 @@ class ConditionalUnet1D(nn.Module):
             ]))
 
         up_modules = nn.ModuleList([])
-        for ind, (dim_in, dim_out) in enumerate(reversed(in_out[1:])):
+        for ind, (dim_in, dim_out) in enumerate(reversed(in_out[1:])): # for [ (512, 1024), (256, 512)]
             is_last = ind >= (len(in_out) - 1)
             up_modules.append(nn.ModuleList([
                 ConditionalResidualBlock1D(
@@ -211,10 +211,10 @@ class ConditionalUnet1D(nn.Module):
             timestep: Union[torch.Tensor, float, int],
             global_cond=None):
         """
-        x: (B,T,input_dim = action_dim) , T maybe is prediction horizon
+        x: (B,T,input_dim = action_dim) , T is action prediction horizon
         timestep: (B,) or int, diffusion step
         global_cond: (B,global_cond_dim)
-        output: (B,T,input_dim)
+        output: (B,T,input_dim), this is noise prediction
         """
         # (B,T,C)
         sample = sample.moveaxis(-1,-2)
@@ -230,32 +230,34 @@ class ConditionalUnet1D(nn.Module):
         # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
         timesteps = timesteps.expand(sample.shape[0])
 
-        global_feature = self.diffusion_step_encoder(timesteps)
-
+        global_feature = self.diffusion_step_encoder(timesteps) # [64,256]
         if global_cond is not None:
-            global_feature = torch.cat([global_feature, global_cond], axis=-1)
+            global_feature = torch.cat([global_feature, global_cond], axis=-1) # [64,1284] ,there (256+1028=1284)
 
-        x = sample
+        x = sample   # [64, 2, 16]
         h = []
         for idx, (resnet, resnet2, downsample) in enumerate(self.down_modules):
             x = resnet(x, global_feature)
             x = resnet2(x, global_feature)
             h.append(x)
             x = downsample(x)
+        # [64,256,16]*2 -> [64,256,8] -> [64,512,8]*2 -> [64,512,4] -> [64,1024,4]*3
 
         for mid_module in self.mid_modules:
             x = mid_module(x, global_feature)
+        # [64,1024,4]*2
 
         for idx, (resnet, resnet2, upsample) in enumerate(self.up_modules):
             x = torch.cat((x, h.pop()), dim=1)
             x = resnet(x, global_feature)
             x = resnet2(x, global_feature)
             x = upsample(x)
+        # [64,2048,4] -> [64,512,4]*2 -> [64,512,8] -> [64,1024,8] -> [64,256,8]*2 -> [64,256,16]
 
-        x = self.final_conv(x)
+        x = self.final_conv(x) # [64,2,16]
 
         # (B,C,T)
-        x = x.moveaxis(-1,-2)
+        x = x.moveaxis(-1,-2)  # [64,16,2]
         # (B,T,C)
         return x
     

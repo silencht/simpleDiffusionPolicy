@@ -135,40 +135,39 @@ with tqdm(range(num_epochs), desc='Epoch') as tglobal:
             for nbatch in tepoch:
                 # data normalized in dataset
                 # device transfer
-                nimage = nbatch['image'][:,:obs_horizon].to(device)
-                nagent_pos = nbatch['agent_pos'][:,:obs_horizon].to(device)
-                naction = nbatch['action'].to(device)
-                B = nagent_pos.shape[0]
+                nimage = nbatch['image'][:,:obs_horizon].to(device)            # [64, 2, 3, 96, 96], there [:,:obs_horizon] maybe do nothing.
+                nagent_pos = nbatch['agent_pos'][:,:obs_horizon].to(device)    # [64, 2, 2]
+                naction = nbatch['action'].to(device)                          # [64, 16, 2]
+                B = nagent_pos.shape[0]                                        # 64
 
-                # encoder vision features
-                image_features = nets['vision_encoder'](
-                    nimage.flatten(end_dim=1))
-                image_features = image_features.reshape(
-                    *nimage.shape[:2],-1)
+                # encoder vision features, input nimage.flatten(end_dim=1).shape is [128,3,96,96]
+                image_features = nets['vision_encoder'](nimage.flatten(end_dim=1)) # [128,512]
+                # reshape input nimage.shape[:2] is [64,2]
+                image_features = image_features.reshape(*nimage.shape[:2],-1)      # [64,2,512]
                 # (B,obs_horizon,D)
 
                 # concatenate vision feature and low-dim obs
-                obs_features = torch.cat([image_features, nagent_pos], dim=-1)
-                obs_cond = obs_features.flatten(start_dim=1)
+                obs_features = torch.cat([image_features, nagent_pos], dim=-1)     # [64,2,514]
+                obs_cond = obs_features.flatten(start_dim=1)                       # [64,2*514]
                 # (B, obs_horizon * obs_dim)
 
                 # sample noise to add to actions
-                noise = torch.randn(naction.shape, device=device)
+                noise = torch.randn(naction.shape, device=device)                  # [64, 16, 2]
 
                 # sample a diffusion iteration for each data point
                 timesteps = torch.randint(
                     0, noise_scheduler.config.num_train_timesteps,
                     (B,), device=device
-                ).long()
+                ).long()                                                           # [64]
 
                 # add noise to the clean images according to the noise magnitude at each diffusion iteration
                 # (this is the forward diffusion process)
                 noisy_actions = noise_scheduler.add_noise(
-                    naction, noise, timesteps)
+                    naction, noise, timesteps)                                     # [64, 16, 2]
 
-                # predict the noise residual
+                # predict the noise residual (with condion obs_cond)
                 noise_pred = noise_pred_net(
-                    noisy_actions, timesteps, global_cond=obs_cond)
+                    noisy_actions, timesteps, global_cond=obs_cond)                # [64, 16, 2]
 
                 # L2 loss
                 loss = nn.functional.mse_loss(noise_pred, noise)
