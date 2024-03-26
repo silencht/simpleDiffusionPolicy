@@ -1,137 +1,290 @@
+from pushTenv import PushTEnv
+from gym import spaces
+import cv2
+from pushTdataset import PushTImageDataset, normalize_data , unnormalize_data
+from network import get_resnet, replace_bn_with_gn, ConditionalUnet1D
+import numpy as np
+import torch
+import torch.nn as nn
 import collections
+from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+from tqdm.auto import tqdm
+
+# # env import
 from skvideo.io import vwrite
 from IPython.display import Video
-from pushTdataset import PushTImageDataset, gdown, normalize_data, unnormalize_data
+import gdown
+import os
 
 
-## TODO!
+class PushTImageEnv(PushTEnv):
+    metadata = {"render.modes": ["rgb_array"], "video.frames_per_second": 10}
 
-## Loading Pretrained Checkpoint
-# Set `load_pretrained = True` to load pretrained weights.
-# load_pretrained = True
-# if load_pretrained:
-#   ckpt_path = "pusht_vision_100ep.ckpt"
-#   if not os.path.isfile(ckpt_path):
-#       id = "1XKpfNSlwYMGaF5CncoFaLKCDTWoLAHf1&confirm=t"
-#       gdown.download(id=id, output=ckpt_path, quiet=False)
+    def __init__(self,
+            legacy=False,
+            block_cog=None,
+            damping=None,
+            render_size=96):
+        super().__init__(
+            legacy=legacy,
+            block_cog=block_cog,
+            damping=damping,
+            render_size=render_size,
+            render_action=False)
+        ws = self.window_size
+        self.observation_space = spaces.Dict({
+            'image': spaces.Box(
+                low=0,
+                high=1,
+                shape=(3,render_size,render_size),
+                dtype=np.float32
+            ),
+            'agent_pos': spaces.Box(
+                low=0,
+                high=ws,
+                shape=(2,),
+                dtype=np.float32
+            )
+        })
+        self.render_cache = None
 
-#   state_dict = torch.load(ckpt_path, map_location='cuda')
-#   ema_nets = nets
-#   ema_nets.load_state_dict(state_dict)
-#   print('Pretrained weights loaded.')
-# else:
-#   print("Skipped pretrained weight loading.")
+    def _get_obs(self):
+        img = super()._render_frame(mode='rgb_array')
 
+        agent_pos = np.array(self.agent.position)
+        img_obs = np.moveaxis(img.astype(np.float32) / 255, -1, 0)
+        obs = {
+            'image': img_obs,
+            'agent_pos': agent_pos
+        }
 
-## Inference
+        # draw action
+        if self.latest_action is not None:
+            action = np.array(self.latest_action)
+            coord = (action / 512 * 96).astype(np.int32)
+            marker_size = int(8/96*self.render_size)
+            thickness = int(1/96*self.render_size)
+            cv2.drawMarker(img, coord,
+                color=(255,0,0), markerType=cv2.MARKER_CROSS,
+                markerSize=marker_size, thickness=thickness)
+        self.render_cache = img
 
-# # limit enviornment interaction to 200 steps before termination
-# max_steps = 200
-# env = PushTImageEnv()
-# # use a seed >200 to avoid initial states seen in the training dataset
-# env.seed(100000)
+        return obs
 
-# # get first observation
-# obs, info = env.reset()
+    def render(self, mode):
+        assert mode == 'rgb_array'
 
-# # keep a queue of last 2 steps of observations
-# obs_deque = collections.deque(
-#     [obs] * obs_horizon, maxlen=obs_horizon)
-# # save visualization and rewards
-# imgs = [env.render(mode='rgb_array')]
-# rewards = list()
-# done = False
-# step_idx = 0
+        if self.render_cache is None:
+            self._get_obs()
 
-# with tqdm(total=max_steps, desc="Eval PushTImageEnv") as pbar:
-#     while not done:
-#         B = 1
-#         # stack the last obs_horizon number of observations
-#         images = np.stack([x['image'] for x in obs_deque])
-#         agent_poses = np.stack([x['agent_pos'] for x in obs_deque])
+        return self.render_cache
 
-#         # normalize observation
-#         nagent_poses = normalize_data(agent_poses, stats=stats['agent_pos'])
-#         # images are already normalized to [0,1]
-#         nimages = images
+    
+# download demonstration data from Google Drive
+dataset_path = "pusht_cchi_v7_replay.zarr.zip"
+if not os.path.isfile(dataset_path):
+    id = "1KY1InLurpMvJDRb14L9NlXT_fEsCvVUq&confirm=t"
+    gdown.download(id=id, output=dataset_path, quiet=False)
 
-#         # device transfer
-#         nimages = torch.from_numpy(nimages).to(device, dtype=torch.float32)
-#         # (2,3,96,96)
-#         nagent_poses = torch.from_numpy(nagent_poses).to(device, dtype=torch.float32)
-#         # (2,2)
+# parameters
+pred_horizon = 16
+obs_horizon = 2
+action_horizon = 8
+#|o|o|                             observations: 2
+#| |a|a|a|a|a|a|a|a|               actions executed: 8
+#|p|p|p|p|p|p|p|p|p|p|p|p|p|p|p|p| actions predicted: 16
 
-#         # infer action
-#         with torch.no_grad():
-#             # get image features
-#             image_features = ema_nets['vision_encoder'](nimages)
-#             # (2,512)
+# create dataset from file
+dataset = PushTImageDataset(
+    dataset_path=dataset_path,
+    pred_horizon=pred_horizon,
+    obs_horizon=obs_horizon,
+    action_horizon=action_horizon
+)
+# save training data statistics (min, max) for each dim
+stats = dataset.stats
 
-#             # concat with low-dim observations
-#             obs_features = torch.cat([image_features, nagent_poses], dim=-1)
+# create dataloader
+dataloader = torch.utils.data.DataLoader(
+    dataset,
+    batch_size=64,
+    num_workers=4,
+    shuffle=True,
+    # accelerate cpu-gpu transfer
+    pin_memory=True,
+    # don't kill worker process afte each epoch
+    persistent_workers=True
+)
 
-#             # reshape observation to (B,obs_horizon*obs_dim)
-#             obs_cond = obs_features.unsqueeze(0).flatten(start_dim=1)
+# construct ResNet18 encoder
+# if you have multiple camera views, use seperate encoder weights for each view.
+vision_encoder = get_resnet('resnet18')
 
-#             # initialize action from Guassian noise
-#             noisy_action = torch.randn(
-#                 (B, pred_horizon, action_dim), device=device)
-#             naction = noisy_action
+# IMPORTANT!
+# replace all BatchNorm with GroupNorm to work with EMA
+# performance will tank if you forget to do this!
+vision_encoder = replace_bn_with_gn(vision_encoder)
 
-#             # init scheduler
-#             noise_scheduler.set_timesteps(num_diffusion_iters)
+# ResNet18 has output dim of 512
+vision_feature_dim = 512
+# agent_pos is 2 dimensional
+lowdim_obs_dim = 2
+# observation feature has 514 dims in total per step
+obs_dim = vision_feature_dim + lowdim_obs_dim
+action_dim = 2
 
-#             for k in noise_scheduler.timesteps:
-#                 # predict noise
-#                 noise_pred = ema_nets['noise_pred_net'](
-#                     sample=naction,
-#                     timestep=k,
-#                     global_cond=obs_cond
-#                 )
+# create network object
+noise_pred_net = ConditionalUnet1D(
+    input_dim=action_dim,
+    global_cond_dim=obs_dim*obs_horizon
+)
 
-#                 # inverse diffusion step (remove noise)
-#                 naction = noise_scheduler.step(
-#                     model_output=noise_pred,
-#                     timestep=k,
-#                     sample=naction
-#                 ).prev_sample
+# the final arch has 2 parts
+nets = nn.ModuleDict({
+    'vision_encoder': vision_encoder,
+    'noise_pred_net': noise_pred_net
+})
 
-#         # unnormalize action
-#         naction = naction.detach().to('cpu').numpy()
-#         # (B, pred_horizon, action_dim)
-#         naction = naction[0]
-#         action_pred = unnormalize_data(naction, stats=stats['action'])
+# for this demo, we use DDPMScheduler with 100 diffusion iterations
+num_diffusion_iters = 100
+noise_scheduler = DDPMScheduler(
+    num_train_timesteps=num_diffusion_iters,
+    # the choise of beta schedule has big impact on performance
+    # we found squared cosine works the best
+    beta_schedule='squaredcos_cap_v2',
+    # clip output to [-1,1] to improve stability
+    clip_sample=True,
+    # our network predicts noise (instead of denoised action)
+    prediction_type='epsilon'
+)
 
-#         # only take action_horizon number of actions
-#         start = obs_horizon - 1
-#         end = start + action_horizon
-#         action = action_pred[start:end,:]
-#         # (action_horizon, action_dim)
+# device transfer
+device = torch.device('cuda')
+_ = nets.to(device)
 
-#         # execute action_horizon number of steps
-#         # without replanning
-#         for i in range(len(action)):
-#             # stepping env
-#             obs, reward, done, _, info = env.step(action[i])
-#             # save observations
-#             obs_deque.append(obs)
-#             # and reward/vis
-#             rewards.append(reward)
-#             imgs.append(env.render(mode='rgb_array'))
+load_pretrained = True
+if load_pretrained:
+  ckpt_path = "pusht_vision_100ep.ckpt"
+  if not os.path.isfile(ckpt_path):
+      id = "1XKpfNSlwYMGaF5CncoFaLKCDTWoLAHf1&confirm=t"
+      gdown.download(id=id, output=ckpt_path, quiet=False)
 
-#             # update progress bar
-#             step_idx += 1
-#             pbar.update(1)
-#             pbar.set_postfix(reward=reward)
-#             if step_idx > max_steps:
-#                 done = True
-#             if done:
-#                 break
+  state_dict = torch.load(ckpt_path, map_location='cuda')
+  ema_nets = nets
+  ema_nets.load_state_dict(state_dict)
+  print('Pretrained weights loaded.')
+else:
+  print("Skipped pretrained weight loading.")
 
-# # print out the maximum target coverage
-# print('Score: ', max(rewards))
+#@markdown ### **Inference**
 
-# # visualize
-# from IPython.display import Video
-# vwrite('vis.mp4', imgs)
-# Video('vis.mp4', embed=True, width=256, height=256)
+# limit enviornment interaction to 200 steps before termination
+max_steps = 200
+env = PushTImageEnv()
+# use a seed >200 to avoid initial states seen in the training dataset
+env.seed(100000)
+
+# get first observation
+obs, info = env.reset()
+
+# keep a queue of last 2 steps of observations
+obs_deque = collections.deque(
+    [obs] * obs_horizon, maxlen=obs_horizon)
+# save visualization and rewards
+imgs = [env.render(mode='rgb_array')]
+rewards = list()
+done = False
+step_idx = 0
+
+with tqdm(total=max_steps, desc="Eval PushTImageEnv") as pbar:
+    while not done:
+        B = 1
+        # stack the last obs_horizon number of observations
+        images = np.stack([x['image'] for x in obs_deque])
+        agent_poses = np.stack([x['agent_pos'] for x in obs_deque])
+
+        # normalize observation
+        nagent_poses = normalize_data(agent_poses, stats=stats['agent_pos'])
+        # images are already normalized to [0,1]
+        nimages = images
+
+        # device transfer
+        nimages = torch.from_numpy(nimages).to(device, dtype=torch.float32)
+        # (2,3,96,96)
+        nagent_poses = torch.from_numpy(nagent_poses).to(device, dtype=torch.float32)
+        # (2,2)
+
+        # infer action
+        with torch.no_grad():
+            # get image features
+            image_features = ema_nets['vision_encoder'](nimages)
+            # (2,512)
+
+            # concat with low-dim observations
+            obs_features = torch.cat([image_features, nagent_poses], dim=-1)
+
+            # reshape observation to (B,obs_horizon*obs_dim)
+            obs_cond = obs_features.unsqueeze(0).flatten(start_dim=1)
+
+            # initialize action from Guassian noise
+            noisy_action = torch.randn(
+                (B, pred_horizon, action_dim), device=device)
+            naction = noisy_action
+
+            # init scheduler
+            noise_scheduler.set_timesteps(num_diffusion_iters)
+
+            for k in noise_scheduler.timesteps:
+                # predict noise
+                noise_pred = ema_nets['noise_pred_net'](
+                    sample=naction,
+                    timestep=k,
+                    global_cond=obs_cond
+                )
+
+                # inverse diffusion step (remove noise)
+                naction = noise_scheduler.step(
+                    model_output=noise_pred,
+                    timestep=k,
+                    sample=naction
+                ).prev_sample
+
+        # unnormalize action
+        naction = naction.detach().to('cpu').numpy()
+        # (B, pred_horizon, action_dim)
+        naction = naction[0]
+        action_pred = unnormalize_data(naction, stats=stats['action'])
+
+        # only take action_horizon number of actions
+        start = obs_horizon - 1
+        end = start + action_horizon
+        action = action_pred[start:end,:]
+        # (action_horizon, action_dim)
+
+        # execute action_horizon number of steps
+        # without replanning
+        for i in range(len(action)):
+            # stepping env
+            obs, reward, done, _, info = env.step(action[i])
+            # save observations
+            obs_deque.append(obs)
+            # and reward/vis
+            rewards.append(reward)
+            imgs.append(env.render(mode='rgb_array'))
+
+            # update progress bar
+            step_idx += 1
+            pbar.update(1)
+            pbar.set_postfix(reward=reward)
+            if step_idx > max_steps:
+                done = True
+            if done:
+                break
+
+# print out the maximum target coverage
+print('Score: ', max(rewards))
+
+# visualize
+from IPython.display import Video
+vwrite('vis.mp4', imgs)
+Video('vis.mp4', embed=True, width=256, height=256)

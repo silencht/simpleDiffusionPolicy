@@ -193,6 +193,8 @@ with tqdm(range(num_epochs), desc='Epoch') as tglobal:
 # is used for inference
 ema_nets = nets
 ema.copy_to(ema_nets.parameters())
-
-
 print("Train End.")
+
+# 保存参数模型到本地检查点文件
+torch.save(ema_nets.state_dict(), "simpledp.ckpt")
+print("Model parameters saved to 'simpledp.ckpt'.")

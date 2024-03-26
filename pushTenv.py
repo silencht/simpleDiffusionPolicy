@@ -7,17 +7,17 @@
 #  Adapted from [Implicit Behavior Cloning](https://implicitbc.github.io/)
 
 # env import
-import cv2
-from typing import Tuple, Sequence
-import numpy as np
 import gym
 from gym import spaces
+from typing import Tuple, Sequence
+import numpy as np
 import pygame
 import pymunk
 import pymunk.pygame_util
 from pymunk.space_debug_draw_options import SpaceDebugColor
 from pymunk.vec2d import Vec2d
 import shapely.geometry as sg
+import cv2
 import skimage.transform as st
 import collections
 
@@ -625,47 +625,47 @@ class PushTImageEnv(PushTEnv):
         return self.render_cache
     
 ## Env Demo
-if __name__ == "__main__":
-    # Standard Gym Env (0.21.0 API)
-    # 0. create env object
-    env = PushTImageEnv()
-    # 1. seed env for initial state.
-    # Seed 0-200 are used for the demonstration dataset.
-    env.seed(1000)
-    # 2. must reset before use
-    obs, info = env.reset()
-    # 3. 2D positional action space [0,512]
-    action = env.action_space.sample()
-    # 4. Standard gym step method
-    obs, reward, terminated, truncated, info = env.step(action)
+# if __name__ == "__main__":
+#     # Standard Gym Env (0.21.0 API)
+#     # 0. create env object
+#     env = PushTImageEnv()
+#     # 1. seed env for initial state.
+#     # Seed 0-200 are used for the demonstration dataset.
+#     env.seed(1000)
+#     # 2. must reset before use
+#     obs, info = env.reset()
+#     # 3. 2D positional action space [0,512]
+#     action = env.action_space.sample()
+#     # 4. Standard gym step method
+#     obs, reward, terminated, truncated, info = env.step(action)
 
-    # prints and explains each dimension of the observation and action vectors
-    with np.printoptions(precision=4, suppress=True, threshold=5):
-        print("action: ", action)
-        print("obs: ", obs)
-        print("reward: ", reward)
-        print("terminated: ", terminated)
-        print("truncated: ", truncated)
-        print("info: ", info)
+#     # prints and explains each dimension of the observation and action vectors
+#     with np.printoptions(precision=4, suppress=True, threshold=5):
+#         print("action: ", action)
+#         print("obs: ", obs)
+#         print("reward: ", reward)
+#         print("terminated: ", terminated)
+#         print("truncated: ", truncated)
+#         print("info: ", info)
         
-    # visualization
-    image_obs = obs['image']
-    image_to_show = (image_obs * 255).astype(np.uint8).transpose(1, 2, 0)
-    cv2.namedWindow('Environment Image', cv2.WINDOW_NORMAL)
-    cv2.imshow('Environment Image', image_to_show)
-    cv2.waitKey(0)
+#     # visualization
+#     image_obs = obs['image']
+#     image_to_show = (image_obs * 255).astype(np.uint8).transpose(1, 2, 0)
+#     cv2.namedWindow('Environment Image', cv2.WINDOW_NORMAL)
+#     cv2.imshow('Environment Image', image_to_show)
+#     cv2.waitKey(0)
 
-    obs, reward, terminated, truncated, info = env.step(action)
-    with np.printoptions(precision=4, suppress=True, threshold=5):
-        print("action: ", action)
-        print("obs: ", obs)
-        print("reward: ", reward)
-        print("terminated: ", terminated)
-        print("truncated: ", truncated)
-        print("info: ", info)
-        # visualization
-    image_obs = obs['image']
-    image_to_show = (image_obs * 255).astype(np.uint8).transpose(1, 2, 0)
-    cv2.namedWindow('Environment Image', cv2.WINDOW_NORMAL)
-    cv2.imshow('Environment Image', image_to_show)
-    cv2.waitKey(0)
+#     obs, reward, terminated, truncated, info = env.step(action)
+#     with np.printoptions(precision=4, suppress=True, threshold=5):
+#         print("action: ", action)
+#         print("obs: ", obs)
+#         print("reward: ", reward)
+#         print("terminated: ", terminated)
+#         print("truncated: ", truncated)
+#         print("info: ", info)
+#         # visualization
+#     image_obs = obs['image']
+#     image_to_show = (image_obs * 255).astype(np.uint8).transpose(1, 2, 0)
+#     cv2.namedWindow('Environment Image', cv2.WINDOW_NORMAL)
+#     cv2.imshow('Environment Image', image_to_show)
+#     cv2.waitKey(0)

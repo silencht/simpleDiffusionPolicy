@@ -199,8 +199,8 @@ if __name__ == "__main__":
     for batch in dataloader:
         result_image = np.zeros((2 * 96, 96, 3), dtype=np.uint8)
         image_array = batch['image'].numpy()
-        cv2.namedWindow('Visualized Images', cv2.WINDOW_NORMAL)
-        cv2.resizeWindow('Visualized Images', 192*4, 192*4)
+        # cv2.namedWindow('Visualized Images', cv2.WINDOW_NORMAL)
+        # cv2.resizeWindow('Visualized Images', 192*4, 192*4)
         for i in range(64):
             for j in range(2):
                 current_image = image_array[i, j]
@@ -209,9 +209,9 @@ if __name__ == "__main__":
                 y_start = j * 96
                 y_end = (j + 1) * 96
                 result_image[y_start:y_end, :, :] = current_image
-            cv2.imshow('Visualized Images', result_image)
-            cv2.waitKey(100)
+            # cv2.imshow('Visualized Images', result_image)
+            # cv2.waitKey(100)
         print("batch['action'].shape", batch['action'].shape)        # [64, 16, 2]
         print("batch['image'].shape:", batch['image'].shape)         # [64, 2, 3, 96, 96]
         print("batch['agent_pos'].shape:", batch['agent_pos'].shape) # [64, 2, 2]
-    cv2.destroyAllWindows()
+    # cv2.destroyAllWindows()

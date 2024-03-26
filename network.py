@@ -8,7 +8,7 @@
 #  - `Downsample1d` Strided convolution to reduce temporal resolution
 #  - `Upsample1d` Transposed convolution to increase temporal resolution
 #  - `Conv1dBlock` Conv1d --> GroupNorm --> Mish
-#  - `ConditionalResidualBlock1D` Takes two inputs `x` and `cond`. \
+#  - `ConditionalResidualBlock1D` Takes two inputs `x` and `cond`.
 #  `x` is passed through 2 `Conv1dBlock` stacked together with residual connection.
 #  `cond` is applied to `x` with [FiLM](https://arxiv.org/abs/1709.07871) conditioning.
 
