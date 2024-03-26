@@ -14,4 +14,8 @@ conda activate simpledp
 python trainDP.py
 ```
 ### inference
-TODO.
+
+```bash
+## in inference.py file, this parameter need to modify: load_pretrained = True
+python inference.py
+```
