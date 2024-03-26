@@ -1,8 +1,7 @@
-from pushTenv import PushTEnv
-from gym import spaces
-import cv2
+from pushTimageEnv import PushTImageEnv
 from pushTdataset import PushTImageDataset, normalize_data , unnormalize_data
 from network import get_resnet, replace_bn_with_gn, ConditionalUnet1D
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,81 +9,11 @@ import collections
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from tqdm.auto import tqdm
 
-# # env import
 from skvideo.io import vwrite
 from IPython.display import Video
 import gdown
 import os
 
-
-class PushTImageEnv(PushTEnv):
-    metadata = {"render.modes": ["rgb_array"], "video.frames_per_second": 10}
-
-    def __init__(self,
-            legacy=False,
-            block_cog=None,
-            damping=None,
-            render_size=96):
-        super().__init__(
-            legacy=legacy,
-            block_cog=block_cog,
-            damping=damping,
-            render_size=render_size,
-            render_action=False)
-        ws = self.window_size
-        self.observation_space = spaces.Dict({
-            'image': spaces.Box(
-                low=0,
-                high=1,
-                shape=(3,render_size,render_size),
-                dtype=np.float32
-            ),
-            'agent_pos': spaces.Box(
-                low=0,
-                high=ws,
-                shape=(2,),
-                dtype=np.float32
-            )
-        })
-        self.render_cache = None
-
-    def _get_obs(self):
-        img = super()._render_frame(mode='rgb_array')
-
-        agent_pos = np.array(self.agent.position)
-        img_obs = np.moveaxis(img.astype(np.float32) / 255, -1, 0)
-        obs = {
-            'image': img_obs,
-            'agent_pos': agent_pos
-        }
-
-        # draw action
-        if self.latest_action is not None:
-            action = np.array(self.latest_action)
-            coord = (action / 512 * 96).astype(np.int32)
-            marker_size = int(8/96*self.render_size)
-            thickness = int(1/96*self.render_size)
-            cv2.drawMarker(img, coord,
-                color=(255,0,0), markerType=cv2.MARKER_CROSS,
-                markerSize=marker_size, thickness=thickness)
-        self.render_cache = img
-
-        return obs
-
-    def render(self, mode):
-        assert mode == 'rgb_array'
-
-        if self.render_cache is None:
-            self._get_obs()
-
-        return self.render_cache
-
-    
-# download demonstration data from Google Drive
-dataset_path = "pusht_cchi_v7_replay.zarr.zip"
-if not os.path.isfile(dataset_path):
-    id = "1KY1InLurpMvJDRb14L9NlXT_fEsCvVUq&confirm=t"
-    gdown.download(id=id, output=dataset_path, quiet=False)
 
 # parameters
 pred_horizon = 16
@@ -93,6 +22,12 @@ action_horizon = 8
 #|o|o|                             observations: 2
 #| |a|a|a|a|a|a|a|a|               actions executed: 8
 #|p|p|p|p|p|p|p|p|p|p|p|p|p|p|p|p| actions predicted: 16
+
+# download demonstration data from Google Drive
+dataset_path = "pusht_cchi_v7_replay.zarr.zip"
+if not os.path.isfile(dataset_path):
+    id = "1KY1InLurpMvJDRb14L9NlXT_fEsCvVUq&confirm=t"
+    gdown.download(id=id, output=dataset_path, quiet=False)
 
 # create dataset from file
 dataset = PushTImageDataset(
@@ -118,18 +53,14 @@ dataloader = torch.utils.data.DataLoader(
 
 # construct ResNet18 encoder
 # if you have multiple camera views, use seperate encoder weights for each view.
-vision_encoder = get_resnet('resnet18')
-
-# IMPORTANT!
-# replace all BatchNorm with GroupNorm to work with EMA
+# IMPORTANT! replace all BatchNorm with GroupNorm to work with EMA
 # performance will tank if you forget to do this!
+vision_encoder = get_resnet('resnet18')
 vision_encoder = replace_bn_with_gn(vision_encoder)
 
-# ResNet18 has output dim of 512
+# ResNet18 has output dim of 512, agent_pos is 2 dimensional. observation feature has 514 dims in total per step
 vision_feature_dim = 512
-# agent_pos is 2 dimensional
 lowdim_obs_dim = 2
-# observation feature has 514 dims in total per step
 obs_dim = vision_feature_dim + lowdim_obs_dim
 action_dim = 2
 
@@ -160,23 +91,27 @@ noise_scheduler = DDPMScheduler(
 
 # device transfer
 device = torch.device('cuda')
-_ = nets.to(device)
+ema_nets = nets.to(device)
 
 load_pretrained = True
 if load_pretrained:
-  ckpt_path = "pusht_vision_100ep.ckpt"
-  if not os.path.isfile(ckpt_path):
-      id = "1XKpfNSlwYMGaF5CncoFaLKCDTWoLAHf1&confirm=t"
-      gdown.download(id=id, output=ckpt_path, quiet=False)
+    ckpt_path = "pusht_vision_100ep.ckpt"
+    if not os.path.isfile(ckpt_path):
+        id = "1XKpfNSlwYMGaF5CncoFaLKCDTWoLAHf1&confirm=t"
+        gdown.download(id=id, output=ckpt_path, quiet=False)
 
-  state_dict = torch.load(ckpt_path, map_location='cuda')
-  ema_nets = nets
-  ema_nets.load_state_dict(state_dict)
-  print('Pretrained weights loaded.')
+    state_dict = torch.load(ckpt_path, map_location='cuda')
+    ema_nets.load_state_dict(state_dict)
+    print('Pretrained weights loaded.')
 else:
-  print("Skipped pretrained weight loading.")
+    ckpt_path = "simpledp.ckpt"
+    if not os.path.isfile(ckpt_path):
+        print("No this ckpt File.")
+    else:
+        state_dict = torch.load(ckpt_path, map_location='cuda')
+        ema_nets.load_state_dict(state_dict)
+        print("Skipped pretrained weight loading.")
 
-#@markdown ### **Inference**
 
 # limit enviornment interaction to 200 steps before termination
 max_steps = 200
@@ -191,7 +126,8 @@ obs, info = env.reset()
 obs_deque = collections.deque(
     [obs] * obs_horizon, maxlen=obs_horizon)
 # save visualization and rewards
-imgs = [env.render(mode='rgb_array')]
+imgs = list()
+# imgs = [env.render(mode='rgb_array')]
 rewards = list()
 done = False
 step_idx = 0

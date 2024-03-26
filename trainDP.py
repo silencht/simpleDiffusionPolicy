@@ -1,19 +1,17 @@
-# basic library
-import cv2
-import torch
-import torch.nn as nn
-import numpy as np
-from tqdm.auto import tqdm
-import os
-
 # local file import
-from pushTenv import PushTImageEnv
+from pushTimageEnv import PushTImageEnv
 from pushTdataset import PushTImageDataset, gdown
 from network import get_resnet, replace_bn_with_gn, ConditionalUnet1D
 # diffusion policy import
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from diffusers.training_utils import EMAModel
 from diffusers.optimization import get_scheduler
+# basic library
+import torch
+import torch.nn as nn
+import numpy as np
+from tqdm.auto import tqdm
+import os
 
 
 ## Create Env
