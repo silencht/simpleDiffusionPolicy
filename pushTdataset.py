@@ -1,6 +1,7 @@
 ## Dataset
 # 
 #  Defines `PushTImageDataset` and helper functions
+#  Inherits from torch.utils.data.Dataset.
 # 
 #  The dataset class
 #  - Load data ((image, agent_pos), action) from a zarr storage
@@ -23,6 +24,12 @@ import os
 def create_sample_indices(
         episode_ends:np.ndarray, sequence_length:int,
         pad_before: int=0, pad_after: int=0):
+    '''
+    episode_ends: 一个 NumPy 数组，包含每个episode的结束索引
+    sequence_length: 一个整数，指定要从每个episode中提取的序列的长度
+    pad_before: 一个整数，可选参数，默认值为0，表示在序列开始前添加的填充数量
+    pad_after: 一个整数，可选参数，默认值为0，表示在序列结束后添加的填充数量
+    '''
     indices = list()
     for i in range(len(episode_ends)):
         start_idx = 0
@@ -52,6 +59,12 @@ def create_sample_indices(
 def sample_sequence(train_data, sequence_length,
                     buffer_start_idx, buffer_end_idx,
                     sample_start_idx, sample_end_idx):
+    '''
+    if 4 idx input parameters is [n, n+15, 1, 16], that is "sample_start_idx > 0":
+        data的16个元素中,采样区间只有15个元素，将采样区第一个元素复制填充到第1个元素位置，i.e. [x,x,a,b,c,……]
+    if 4 idx input parameters is [x, m, 0, y<16], that is "sample_end_idx < sequence_length":
+        data的16个元素中,采样区间少于16个元素，将采样区最后的元素复制填充到后续缺少位置， i.e. [a,b,c,……,x,x,x]
+    '''
     result = dict()
     for key, input_arr in train_data.items():
         sample = input_arr[buffer_start_idx:buffer_end_idx]
@@ -100,26 +113,60 @@ class PushTImageDataset(torch.utils.data.Dataset):
         # read from zarr dataset
         dataset_root = zarr.open(dataset_path, 'r')
 
-        # float32, [0,1], (N,96,96,3)
-        train_image_data = dataset_root['data']['img'][:]
-        train_image_data = np.moveaxis(train_image_data, -1,1)
-        # (N,3,96,96)
+        # pusht_cchi_v7_replay.zarr file directory tree
+        # ├── data
+        # │   ├── action (25650, 2)      float32
+        # │   ├── img (25650, 96, 96, 3) float32
+        # │   ├── keypoint (25650, 9, 2) float32
+        # │   ├── n_contacts (25650, 1)  float32
+        # │   └── state (25650, 5)       float32
+        # └── meta
+        #     └── episode_ends (206,)    int64
+
+        train_image_data = dataset_root['data']['img'][:]       # [25650,96,96,3]
+        train_image_data = np.moveaxis(train_image_data, -1,1)  # [25650,3,96,96]
 
         # (N, D)
         train_data = {
             # first two dims of state vector are agent (i.e. gripper) locations
-            'agent_pos': dataset_root['data']['state'][:,:2],
-            'action': dataset_root['data']['action'][:]
+            'agent_pos': dataset_root['data']['state'][:,:2],   # [25650,2]
+            'action': dataset_root['data']['action'][:]         # [25650,2]
         }
-        episode_ends = dataset_root['meta']['episode_ends'][:]
+        # print(dataset_root['data']['state'][0,:]) output below:
+        #          [222., 97., 222.99382, 381.59903, 3.0079994]
+        # 猜测意义    x  ,  y ,  z      , orientation, claw state
+        # print(dataset_root['data']['action'][0,:]) output below:
+        #          [233.  71.]
 
-        # compute start and end of each state-action sequence
-        # also handles padding
+        episode_ends = dataset_root['meta']['episode_ends'][:]  # [206,]
+        # print(episode_ends), ouput below:
+        # [   161   279   420   579   738   895   964  1133  1213  1347  1535  1684
+        #     1824  1949  ...   ...    ...   ...   ...   ...  ...   ...   ...   ...
+        #     ...   ...   ...   ...    ...   ...   ...   ...  ...   ...   ...   ...
+        #     25601 25650]
+
+        # compute start and end of each state-action sequence, also handles padding
         indices = create_sample_indices(
             episode_ends=episode_ends,
-            sequence_length=pred_horizon,
-            pad_before=obs_horizon-1,
-            pad_after=action_horizon-1)
+            sequence_length=pred_horizon,  # 16
+            pad_before=obs_horizon-1,      # 2-1
+            pad_after=action_horizon-1)    # 8-1
+        # print(indices), output below:
+        # format: [buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx]
+        # ( [[    0,    15,     1,    16],
+        #    [    0,    16,     0,    16],
+        #    [    1,    17,     0,    16],
+        #    [    2,    18,     0,    16],
+        #    ...,
+        #    [  151,   161,     0,    10],
+        #    [  152,   161,     0,     9],
+        #    [  161,   176,     1,    16],
+        #    [  162,   178,     0,    16],
+        #    ...,
+        #    [25639, 25650,     0,    11],
+        #    [25640, 25650,     0,    10],
+        #    [25641, 25650,     0,     9]])
+        # print(indices.shape) output is [24208, 4]
 
         # compute statistics and normalized data to [-1,1]
         stats = dict()
@@ -130,6 +177,9 @@ class PushTImageDataset(torch.utils.data.Dataset):
 
         # images are already normalized
         normalized_train_data['image'] = train_image_data
+        # normalized_train_data['image'].shape    =[25650,3,96,96]
+        # normalized_train_data['agent_pos'].shape=[25650,2]
+        # normalized_train_data['action'].shape   =[25650,2]
 
         self.indices = indices
         self.stats = stats
@@ -143,8 +193,7 @@ class PushTImageDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         # get the start/end indices for this datapoint
-        buffer_start_idx, buffer_end_idx, \
-            sample_start_idx, sample_end_idx = self.indices[idx]
+        buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx = self.indices[idx]
 
         # get nomralized data using these indices
         nsample = sample_sequence(
@@ -157,8 +206,11 @@ class PushTImageDataset(torch.utils.data.Dataset):
         )
 
         # discard unused observations
-        nsample['image'] = nsample['image'][:self.obs_horizon,:]
-        nsample['agent_pos'] = nsample['agent_pos'][:self.obs_horizon,:]
+        nsample['image'] = nsample['image'][:self.obs_horizon,:]          # 只保留前obs_horizon张image
+        nsample['agent_pos'] = nsample['agent_pos'][:self.obs_horizon,:]  # 只保留前obs_horizon个agent_pos
+        # print(nsample['image'].shape)      = [2,3,96,96]
+        # print(nsample['agent_pos'])        = [2,2]
+        # print(nsample['action'].shape)     = [16,2]
         return nsample
 
 ## Dataset Demo
@@ -198,10 +250,13 @@ if __name__ == "__main__":
     # visualize data in batch
     for batch in dataloader:
         result_image = np.zeros((2 * 96, 96, 3), dtype=np.uint8)
-        image_array = batch['image'].numpy()
-        # cv2.namedWindow('Visualized Images', cv2.WINDOW_NORMAL)
-        # cv2.resizeWindow('Visualized Images', 192*4, 192*4)
+        image_array   = batch['image'].numpy()                                                        # [64,2,3,96,96]
+        agent_pos_arr = unnormalize_data(batch['agent_pos'], stats=dataset.stats['agent_pos']) / 5.34 # [64,2,2]
+        action_arr    = unnormalize_data(batch['action'], stats=dataset.stats['action']) /5.34        # [64,16,2]        [512,512] / [96,96] = 5.34
+        cv2.namedWindow('Visualized Images', cv2.WINDOW_NORMAL)
+        cv2.resizeWindow('Visualized Images', 192*4, 192*4)
         for i in range(64):
+            # 绘制 image
             for j in range(2):
                 current_image = image_array[i, j]
                 current_image = np.transpose(current_image, (1, 2, 0))
@@ -209,9 +264,21 @@ if __name__ == "__main__":
                 y_start = j * 96
                 y_end = (j + 1) * 96
                 result_image[y_start:y_end, :, :] = current_image
-            # cv2.imshow('Visualized Images', result_image)
-            # cv2.waitKey(100)
-        print("batch['action'].shape", batch['action'].shape)        # [64, 16, 2]
-        print("batch['image'].shape:", batch['image'].shape)         # [64, 2, 3, 96, 96]
-        print("batch['agent_pos'].shape:", batch['agent_pos'].shape) # [64, 2, 2]
-    # cv2.destroyAllWindows()
+
+            # 绘制 agent_pos
+            for k in range(2):
+                agent_pos = agent_pos_arr[i, k]
+                x_pos, y_pos = int(agent_pos[0]), int(agent_pos[1])
+                result_image[y_pos-1:y_pos+1, x_pos-1:x_pos+1, :] = [0, 255, 0]    # 绿色
+                result_image[y_pos+95:y_pos+97, x_pos-1:x_pos+1, :] = [0, 255, 0]  # 绿色
+
+            # 绘制 action
+            for l in range(16):
+                action_pos = action_arr[i, l]
+                x_pos, y_pos = int(action_pos[0]), int(action_pos[1])
+                result_image[y_pos-1:y_pos+1, x_pos-1:x_pos+1, :] = [0, 0, 255]    # 红色
+                result_image[y_pos+95:y_pos+97, x_pos-1:x_pos+1, :] = [0, 0, 255]  # 红色
+
+            cv2.imshow('Visualized Images', result_image)
+            cv2.waitKey(100)
+    cv2.destroyAllWindows()
