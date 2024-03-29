@@ -81,7 +81,7 @@ nets = nn.ModuleDict({
 # The Denoising Diffusion Implicit Models (DDIM) approach [45] decouples the number of denoising iterations in training and inference, 
 # thereby allowing the algorithm to use fewer iterations for inference to speed up the process.
 # 将 num_diffusion_iters 数值修改小可以加速推理过程，代价是输出状态的不连续、不稳定性（vis.mp4结果视频观察得知）
-num_diffusion_iters = 50
+num_diffusion_iters = 100
 noise_scheduler = DDPMScheduler(
     num_train_timesteps=num_diffusion_iters,
     # the choise of beta schedule has big impact on performance
