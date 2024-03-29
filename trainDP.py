@@ -25,7 +25,6 @@ env.seed(1000)
 obs, info = env.reset()
 # 3. 2D positional action space [0,512]
 action = env.action_space.sample()
-print(action)
 # 4. Standard gym step method
 obs, reward, terminated, truncated, info = env.step(action)
 
@@ -37,12 +36,12 @@ if not os.path.isfile(dataset_path):
     id = "1KY1InLurpMvJDRb14L9NlXT_fEsCvVUq&confirm=t"
     gdown.download(id=id, output=dataset_path, quiet=False)
 # parameters
-#|o|o|                             observations: 2
+#|o|o|                             observations: 2 (包括image和agent_pos)
 #| |a|a|a|a|a|a|a|a|               actions executed: 8
 #|p|p|p|p|p|p|p|p|p|p|p|p|p|p|p|p| actions predicted: 16
-pred_horizon = 16
-obs_horizon = 2
-action_horizon = 8
+pred_horizon = 16                  #此为论文Fig.3中 Diffusion Policy的预测步数 T_{p} 
+obs_horizon = 2                    #此为论文Fig.3中 输入Diffusion Policy的 latest T_{o}
+action_horizon = 8                 #此为论文中的执行步数 T_{a}
 # create dataset from file
 dataset = PushTImageDataset(
     dataset_path=dataset_path,
@@ -131,16 +130,16 @@ with tqdm(range(num_epochs), desc='Epoch') as tglobal:
         # batch loop
         with tqdm(dataloader, desc='Batch', leave=False) as tepoch:
             for nbatch in tepoch:
-                # data normalized in dataset
-                # device transfer
-                nimage = nbatch['image'][:,:obs_horizon].to(device)            # [64, 2, 3, 96, 96], there [:,:obs_horizon] maybe do nothing.
+                # data normalized in dataset, device transfer
+                # 注: [:,:obs_horizon] 实际想做 pushTdataset.py 中 nsample['image'] = nsample['image'][:self.obs_horizon,:]做的事情，所以此处作用重复
+                nimage = nbatch['image'][:,:obs_horizon].to(device)            # [64, 2, 3, 96, 96]
                 nagent_pos = nbatch['agent_pos'][:,:obs_horizon].to(device)    # [64, 2, 2]
                 naction = nbatch['action'].to(device)                          # [64, 16, 2]
                 B = nagent_pos.shape[0]                                        # 64
 
-                # encoder vision features, input nimage.flatten(end_dim=1).shape is [128,3,96,96]
+                # encoder vision features, input var 'nimage.flatten(end_dim=1).shape' is [128,3,96,96]
                 image_features = nets['vision_encoder'](nimage.flatten(end_dim=1)) # [128,512]
-                # reshape input nimage.shape[:2] is [64,2]
+                # reshape input var 'nimage.shape[:2]' is [64,2]
                 image_features = image_features.reshape(*nimage.shape[:2],-1)      # [64,2,512]
                 # (B,obs_horizon,D)
 
@@ -158,7 +157,7 @@ with tqdm(range(num_epochs), desc='Epoch') as tglobal:
                     (B,), device=device
                 ).long()                                                           # [64]
 
-                # add noise to the clean images according to the noise magnitude at each diffusion iteration
+                # add noise to the clean images (not actions??) according to the noise magnitude at each diffusion iteration
                 # (this is the forward diffusion process)
                 noisy_actions = noise_scheduler.add_noise(
                     naction, noise, timesteps)                                     # [64, 16, 2]

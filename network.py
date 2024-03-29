@@ -211,26 +211,25 @@ class ConditionalUnet1D(nn.Module):
             timestep: Union[torch.Tensor, float, int],
             global_cond=None):
         """
-        x: (B,T,input_dim = action_dim) , T is action prediction horizon
-        timestep: (B,) or int, diffusion step
-        global_cond: (B,global_cond_dim)
-        output: (B,T,input_dim), this is noise prediction
+        x: (B,T,input_dim = action_dim) .       此为论文Fig.3中 输入Diffusion Policy的 Action Sequence A, [64, 16, 2]      
+        timestep: (B,) or int, diffusion step . 此为论文Fig.3中 输入Diffusion Policy的 step k的位置编码特征 
+        global_cond: (B,global_cond_dim) .      此为论文Fig.3中 输入Diffusion Policy的 Observation O_{t}
+        output: (B,T,input_dim), this is noise prediction .   输出预测的噪声 \epsilon_{k}
         """
         # (B,T,C)
         sample = sample.moveaxis(-1,-2)
         # (B,C,T)
 
-        # 1. time
         timesteps = timestep
         if not torch.is_tensor(timesteps):
             # TODO: this requires sync between CPU and GPU. So try to pass timesteps as tensors if you can
             timesteps = torch.tensor([timesteps], dtype=torch.long, device=sample.device)
         elif torch.is_tensor(timesteps) and len(timesteps.shape) == 0:
             timesteps = timesteps[None].to(sample.device)
-        # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
+        # broadcast to batch dimension in a way that's compatible with ONNX/Core ML (确保维度一致)
         timesteps = timesteps.expand(sample.shape[0])
 
-        global_feature = self.diffusion_step_encoder(timesteps) # [64,256]
+        global_feature = self.diffusion_step_encoder(timesteps)                # [64,256]
         if global_cond is not None:
             global_feature = torch.cat([global_feature, global_cond], axis=-1) # [64,1284] ,there (256+1028=1284)
 

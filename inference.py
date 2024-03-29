@@ -16,12 +16,12 @@ import os
 
 
 # parameters
-pred_horizon = 16
-obs_horizon = 2
-action_horizon = 8
-#|o|o|                             observations: 2
+#|o|o|                             observations: 2 (包括image和agent_pos)
 #| |a|a|a|a|a|a|a|a|               actions executed: 8
 #|p|p|p|p|p|p|p|p|p|p|p|p|p|p|p|p| actions predicted: 16
+pred_horizon = 16                  #此为论文Fig.3中 Diffusion Policy的预测步数 T_{p} 
+obs_horizon = 2                    #此为论文Fig.3中 输入Diffusion Policy的 latest T_{o}
+action_horizon = 8                 #此为论文中的执行步数 T_{a}
 
 # download demonstration data from Google Drive
 dataset_path = "pusht_cchi_v7_replay.zarr.zip"
@@ -36,7 +36,7 @@ dataset = PushTImageDataset(
     obs_horizon=obs_horizon,
     action_horizon=action_horizon
 )
-# save training data statistics (min, max) for each dim
+# save training data statistics (min, max) for each dim，记录数据集的统计信息，用于对数据样本进行反归一化
 stats = dataset.stats
 
 # create dataloader
@@ -93,7 +93,7 @@ noise_scheduler = DDPMScheduler(
 device = torch.device('cuda')
 ema_nets = nets.to(device)
 
-load_pretrained = True
+load_pretrained = False
 if load_pretrained:
     ckpt_path = "pusht_vision_100ep.ckpt"
     if not os.path.isfile(ckpt_path):
@@ -114,17 +114,14 @@ else:
 
 
 # limit enviornment interaction to 200 steps before termination
-max_steps = 200
+max_steps = 16
 env = PushTImageEnv()
 # use a seed >200 to avoid initial states seen in the training dataset
 env.seed(100000)
-
 # get first observation
 obs, info = env.reset()
-
 # keep a queue of last 2 steps of observations
-obs_deque = collections.deque(
-    [obs] * obs_horizon, maxlen=obs_horizon)
+obs_deque = collections.deque([obs] * obs_horizon, maxlen=obs_horizon)                # maxlen=obs_horizon保证了队列长度恒定，添新移旧
 # save visualization and rewards
 imgs = list()
 # imgs = [env.render(mode='rgb_array')]
@@ -144,28 +141,24 @@ with tqdm(total=max_steps, desc="Eval PushTImageEnv") as pbar:
         # images are already normalized to [0,1]
         nimages = images
 
-        # device transfer
-        nimages = torch.from_numpy(nimages).to(device, dtype=torch.float32)
-        # (2,3,96,96)
-        nagent_poses = torch.from_numpy(nagent_poses).to(device, dtype=torch.float32)
-        # (2,2)
+        nimages = torch.from_numpy(nimages).to(device, dtype=torch.float32)           # (2,3,96,96)
+        nagent_poses = torch.from_numpy(nagent_poses).to(device, dtype=torch.float32) # (2,2)
 
         # infer action
         with torch.no_grad():
             # get image features
-            image_features = ema_nets['vision_encoder'](nimages)
-            # (2,512)
+            image_features = ema_nets['vision_encoder'](nimages)                      # (2,512)
 
             # concat with low-dim observations
-            obs_features = torch.cat([image_features, nagent_poses], dim=-1)
+            obs_features = torch.cat([image_features, nagent_poses], dim=-1)          # (2,514)
 
             # reshape observation to (B,obs_horizon*obs_dim)
-            obs_cond = obs_features.unsqueeze(0).flatten(start_dim=1)
+            obs_cond = obs_features.unsqueeze(0).flatten(start_dim=1)                 # (1,1028)
 
             # initialize action from Guassian noise
             noisy_action = torch.randn(
                 (B, pred_horizon, action_dim), device=device)
-            naction = noisy_action
+            naction = noisy_action                                                    # (1,16,2)
 
             # init scheduler
             noise_scheduler.set_timesteps(num_diffusion_iters)
@@ -186,20 +179,18 @@ with tqdm(total=max_steps, desc="Eval PushTImageEnv") as pbar:
                 ).prev_sample
 
         # unnormalize action
-        naction = naction.detach().to('cpu').numpy()
-        # (B, pred_horizon, action_dim)
-        naction = naction[0]
-        action_pred = unnormalize_data(naction, stats=stats['action'])
+        naction = naction.detach().to('cpu').numpy()                                  # (1,16,2), that is (B, pred_horizon, action_dim)
+        naction = naction[0]                                                          # (16,2)
+        action_pred = unnormalize_data(naction, stats=stats['action'])                
 
         # only take action_horizon number of actions
-        start = obs_horizon - 1
-        end = start + action_horizon
-        action = action_pred[start:end,:]
-        # (action_horizon, action_dim)
+        start = obs_horizon - 1              # 从最近的一次观测对应的action开始执行
+        end = start + action_horizon         # 执行(action_horizon=)8步
+        action = action_pred[start:end,:]    # 提取出要执行的action序列                  # (8,2), that is (action_horizon, action_dim)
 
         # execute action_horizon number of steps
         # without replanning
-        for i in range(len(action)):
+        for i in range(len(action)):         # 预测一次，执行action_horizon步，一共执行max_steps步
             # stepping env
             obs, reward, done, _, info = env.step(action[i])
             # save observations
