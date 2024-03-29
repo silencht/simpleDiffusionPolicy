@@ -64,6 +64,7 @@ def sample_sequence(train_data, sequence_length,
         data的16个元素中,采样区间只有15个元素，将采样区第一个元素复制填充到第1个元素位置，i.e. [x,x,a,b,c,……]
     if 4 idx input parameters is [x, m, 0, y<16], that is "sample_end_idx < sequence_length":
         data的16个元素中,采样区间少于16个元素，将采样区最后的元素复制填充到后续缺少位置， i.e. [a,b,c,……,x,x,x]
+    作者对此填充原因的说明：https://github.com/real-stanford/diffusion_policy/issues/30
     '''
     result = dict()
     for key, input_arr in train_data.items():
