@@ -190,6 +190,7 @@ class PushTImageDataset(torch.utils.data.Dataset):
         self.obs_horizon = obs_horizon
 
     def __len__(self):
+        # print(len(self.indices)) output is 24208
         return len(self.indices)
 
     def __getitem__(self, idx):

@@ -42,15 +42,17 @@ if not os.path.isfile(dataset_path):
 pred_horizon = 16                  #此为论文Fig.3中 Diffusion Policy的预测步数 T_{p} 
 obs_horizon = 2                    #此为论文Fig.3中 输入Diffusion Policy的 latest T_{o}
 action_horizon = 8                 #此为论文中的执行步数 T_{a}
+gradient_accumulate_every = 1      #累计梯度机制，可节省训练过程中显存（可参考diffusion policy原始仓库该变量及相关博客，例 https://zhuanlan.zhihu.com/p/454876670）
+global_train_step = 0              #与gradient_accumulate_every一起使用，记录训练步数
 # create dataset from file
-dataset = PushTImageDataset(
+dataset = PushTImageDataset(       #共24208条数据。一共25650条 减去 204组演示数据 乘以 一组中(action_horizon-1=7)不填充的数据量 等于 24208条可用
     dataset_path=dataset_path,
     pred_horizon=pred_horizon,
     obs_horizon=obs_horizon,
     action_horizon=action_horizon
 )
 # create dataloader
-dataloader = torch.utils.data.DataLoader(
+dataloader = torch.utils.data.DataLoader( #批处理后，共24208/64=378组数据
     dataset,
     batch_size=64,
     num_workers=4,
@@ -65,8 +67,7 @@ dataloader = torch.utils.data.DataLoader(
 ## Network
 # construc ResNet18 encoder
 vision_encoder = get_resnet('resnet18')
-# IMPORTANT!
-# replace all BatchNorm with GroupNorm to work with EMA, performance will tank if you forget to do this!
+# IMPORTANT! replace all BatchNorm with GroupNorm to work with EMA, performance will tank if you forget to do this!
 vision_encoder = replace_bn_with_gn(vision_encoder)
 # ResNet18 has output dim of 512
 vision_feature_dim = 512
@@ -120,7 +121,8 @@ lr_scheduler = get_scheduler(
     name='cosine',
     optimizer=optimizer,
     num_warmup_steps=500,
-    num_training_steps=len(dataloader) * num_epochs
+    num_training_steps=len(dataloader) * num_epochs // gradient_accumulate_every,
+    last_epoch=global_train_step-1
 )
 
 with tqdm(range(num_epochs), desc='Epoch') as tglobal:
@@ -129,7 +131,7 @@ with tqdm(range(num_epochs), desc='Epoch') as tglobal:
         epoch_loss = list()
         # batch loop
         with tqdm(dataloader, desc='Batch', leave=False) as tepoch:
-            for nbatch in tepoch:
+            for batch_idx, nbatch in enumerate(tepoch):
                 # data normalized in dataset, device transfer
                 # 注: [:,:obs_horizon] 实际想做 pushTdataset.py 中 nsample['image'] = nsample['image'][:self.obs_horizon,:]做的事情，所以此处作用重复
                 nimage = nbatch['image'][:,:obs_horizon].to(device)            # [64, 2, 3, 96, 96]
@@ -167,18 +169,24 @@ with tqdm(range(num_epochs), desc='Epoch') as tglobal:
                     noisy_actions, timesteps, global_cond=obs_cond)                # [64, 16, 2]
 
                 # L2 loss
-                loss = nn.functional.mse_loss(noise_pred, noise)
+                raw_loss = nn.functional.mse_loss(noise_pred, noise)
+                loss = raw_loss / gradient_accumulate_every
 
                 # optimize
                 loss.backward()
-                optimizer.step()
-                optimizer.zero_grad()
-                # step lr scheduler every batch
-                # this is different from standard pytorch behavior
-                lr_scheduler.step()
+                print("loss.backward()")
+                if global_train_step % gradient_accumulate_every == 0:
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    lr_scheduler.step()
+                    print("optimizer.step()")
 
                 # update Exponential Moving Average of the model weights
                 ema.step(nets.parameters())
+
+                is_last_batch = (batch_idx == (len(dataloader)-1))
+                if not is_last_batch:
+                    global_train_step += 1
 
                 # logging
                 loss_cpu = loss.item()
