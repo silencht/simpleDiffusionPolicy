@@ -1,7 +1,7 @@
 from env.pushTimageEnv import PushTImageEnv
 from env.pushTdataset import PushTImageDataset, normalize_data , unnormalize_data
-from simpleDPmodel.vision_Encoder import get_resnet, replace_bn_with_gn
-from simpleDPmodel.network_Transformer import TransformerForDiffusion
+from vision_Encoder import get_resnet, replace_bn_with_gn
+from network_Transformer import TransformerForDiffusion
 
 import numpy as np
 import torch
