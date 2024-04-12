@@ -115,7 +115,7 @@ else:
 
 
 # limit enviornment interaction to 200 steps before termination
-max_steps = 300
+max_steps = 500
 env = PushTImageEnv()
 # use a seed >200 to avoid initial states seen in the training dataset
 env.seed(100000)
@@ -211,5 +211,5 @@ print('Score: ', max(rewards))
 
 # visualize
 from IPython.display import Video
-vwrite('vis_trans_obs4.mp4', imgs)
-Video('vis_trans_obs4.mp4', embed=True, width=256, height=256)
+vwrite('vis_transformer.mp4', imgs)
+Video('vis_transformer.mp4', embed=True, width=256, height=256)

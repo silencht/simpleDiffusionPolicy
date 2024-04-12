@@ -218,5 +218,5 @@ print('Score: ', max(rewards))
 
 # visualize
 from IPython.display import Video
-vwrite('vis.mp4', imgs)
-Video('vis.mp4', embed=True, width=256, height=256)
+vwrite('vis_unet.mp4', imgs)
+Video('vis_unet.mp4', embed=True, width=256, height=256)
