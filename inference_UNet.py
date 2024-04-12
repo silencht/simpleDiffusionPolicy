@@ -1,6 +1,7 @@
-from pushTimageEnv import PushTImageEnv
-from pushTdataset import PushTImageDataset, normalize_data , unnormalize_data
-from network import get_resnet, replace_bn_with_gn, ConditionalUnet1D
+from env.pushTimageEnv import PushTImageEnv
+from env.pushTdataset import PushTImageDataset, normalize_data, unnormalize_data
+from vision_Encoder import get_resnet, replace_bn_with_gn
+from network_UNet import ConditionalUnet1D
 
 import numpy as np
 import torch

@@ -1,5 +1,5 @@
 from gym import spaces
-from pushTenv import PushTEnv
+from env.pushTenv import PushTEnv
 import numpy as np
 import cv2
 

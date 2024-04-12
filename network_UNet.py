@@ -2,9 +2,8 @@
 # 
 #  Defines a 1D UNet architecture `ConditionalUnet1D`
 #  as the noies prediction network
-# 
+#  
 #  Components
-#  - `SinusoidalPosEmb` Positional encoding for the diffusion iteration k
 #  - `Downsample1d` Strided convolution to reduce temporal resolution
 #  - `Upsample1d` Transposed convolution to increase temporal resolution
 #  - `Conv1dBlock` Conv1d --> GroupNorm --> Mish
@@ -12,27 +11,11 @@
 #  `x` is passed through 2 `Conv1dBlock` stacked together with residual connection.
 #  `cond` is applied to `x` with [FiLM](https://arxiv.org/abs/1709.07871) conditioning.
 
-from typing import Union, Callable
+from pos_Encoder import SinusoidalPosEmb
+from typing import Union
 import torch
 import torch.nn as nn
-import torchvision
-import math
-from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 
-
-class SinusoidalPosEmb(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.dim = dim
-
-    def forward(self, x):
-        device = x.device
-        half_dim = self.dim // 2
-        emb = math.log(10000) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, device=device) * -emb)
-        emb = x[:, None] * emb[None, :]
-        emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
-        return emb
 
 
 class Downsample1d(nn.Module):
@@ -138,6 +121,7 @@ class ConditionalUnet1D(nn.Module):
           The length of this array determines numebr of levels.
         kernel_size: Conv kernel size
         n_groups: Number of groups for GroupNorm
+        `SinusoidalPosEmb` Positional encoding for the diffusion iteration k
         """
 
         super().__init__()
@@ -211,7 +195,7 @@ class ConditionalUnet1D(nn.Module):
             timestep: Union[torch.Tensor, float, int],
             global_cond=None):
         """
-        x: (B,T,input_dim = action_dim) .       此为论文Fig.3中 输入Diffusion Policy的 Action Sequence A, [64, 16, 2]      
+        sample: (B,T,input_dim = action_dim) .  此为论文Fig.3中 输入Diffusion Policy的 Action Sequence A, [64, 16, 2]      
         timestep: (B,) or int, diffusion step . 此为论文Fig.3中 输入Diffusion Policy的 step k的位置编码特征 
         global_cond: (B,global_cond_dim) .      此为论文Fig.3中 输入Diffusion Policy的 Observation O_{t}
         output: (B,T,input_dim), this is noise prediction .   输出预测的噪声 \epsilon_{k}
@@ -259,102 +243,21 @@ class ConditionalUnet1D(nn.Module):
         x = x.moveaxis(-1,-2)  # [64,16,2]
         # (B,T,C)
         return x
-    
-
-## Vision Encoder
-# 
-#  Defines helper functions:
-#  - `get_resnet` to initialize standard ResNet vision encoder
-#  - `replace_bn_with_gn` to replace all BatchNorm layers with GroupNorm
-
-def get_resnet(name:str, weights=None, **kwargs) -> nn.Module:
-    """
-    name: resnet18, resnet34, resnet50
-    weights: "IMAGENET1K_V1", None
-    """
-    # Use standard ResNet implementation from torchvision
-    func = getattr(torchvision.models, name)
-    resnet = func(weights=weights, **kwargs)
-
-    # remove the final fully connected layer
-    # for resnet18, the output dim should be 512
-    resnet.fc = torch.nn.Identity()
-    return resnet
-
-
-def replace_submodules(
-        root_module: nn.Module,
-        predicate: Callable[[nn.Module], bool],
-        func: Callable[[nn.Module], nn.Module]) -> nn.Module:
-    """
-    Replace all submodules selected by the predicate with
-    the output of func.
-
-    predicate: Return true if the module is to be replaced.
-    func: Return new module to use.
-    """
-    if predicate(root_module):
-        return func(root_module)
-
-    bn_list = [k.split('.') for k, m
-        in root_module.named_modules(remove_duplicate=True)
-        if predicate(m)]
-    for *parent, k in bn_list:
-        parent_module = root_module
-        if len(parent) > 0:
-            parent_module = root_module.get_submodule('.'.join(parent))
-        if isinstance(parent_module, nn.Sequential):
-            src_module = parent_module[int(k)]
-        else:
-            src_module = getattr(parent_module, k)
-        tgt_module = func(src_module)
-        if isinstance(parent_module, nn.Sequential):
-            parent_module[int(k)] = tgt_module
-        else:
-            setattr(parent_module, k, tgt_module)
-    # verify that all modules are replaced
-    bn_list = [k.split('.') for k, m
-        in root_module.named_modules(remove_duplicate=True)
-        if predicate(m)]
-    assert len(bn_list) == 0
-    return root_module
-
-def replace_bn_with_gn(
-    root_module: nn.Module,
-    features_per_group: int=16) -> nn.Module:
-    """
-    Relace all BatchNorm layers with GroupNorm.
-    """
-    replace_submodules(
-        root_module=root_module,
-        predicate=lambda x: isinstance(x, nn.BatchNorm2d),
-        func=lambda x: nn.GroupNorm(
-            num_groups=x.num_features//features_per_group,
-            num_channels=x.num_features)
-    )
-    return root_module
 
 
 ## Network Demo
 if __name__ == "__main__":
-    # construct ResNet18 encoder
-    # if you have multiple camera views, use seperate encoder weights for each view.
-    vision_encoder = get_resnet('resnet18')
-
-    # IMPORTANT!
-    # replace all BatchNorm with GroupNorm to work with EMA
-    # performance will tank if you forget to do this!
-    vision_encoder = replace_bn_with_gn(vision_encoder)
-
-    # ResNet18 has output dim of 512
+    
+    
+    batch = 64
     vision_feature_dim = 512
-    # agent_pos is 2 dimensional
-    lowdim_obs_dim = 2
-    # observation feature has 514 dims in total per step
-    obs_dim = vision_feature_dim + lowdim_obs_dim
+    # agent_pos is 3 dimensional (x,y,z)
+    agent_pos_dim = 2
     pred_horizon = 16
     obs_horizon = 2
     action_dim = 2
+    # observation feature has 514 dims in total per step
+    obs_dim = vision_feature_dim + agent_pos_dim
 
     # create network object
     noise_pred_net = ConditionalUnet1D(
@@ -362,51 +265,25 @@ if __name__ == "__main__":
         global_cond_dim=obs_dim*obs_horizon
     )
 
-    # the final arch has 2 parts
-    nets = nn.ModuleDict({
-        'vision_encoder': vision_encoder,
-        'noise_pred_net': noise_pred_net
-    })
-
     # demo
     with torch.no_grad():
-        # example inputs
-        image = torch.zeros((1, obs_horizon,3,96,96))
-        agent_pos = torch.zeros((1, obs_horizon, 2))
-        # vision encoder
-        image_features = nets['vision_encoder'](
-            image.flatten(end_dim=1))
-        # (2,512)
-        image_features = image_features.reshape(*image.shape[:2],-1)
-        # (1,2,512)
-        obs = torch.cat([image_features, agent_pos],dim=-1)
-        # (1,2,514)
-
-        noised_action = torch.randn((1, pred_horizon, action_dim))
-        diffusion_iter = torch.zeros((1,))
+        image_features = torch.zeros((batch, obs_horizon, vision_feature_dim))      
+        print(image_features.shape)                                                  # (64,2,514)
+        agent_pos = torch.zeros((batch, obs_horizon, agent_pos_dim))
+        print(agent_pos.shape)                                                       # (64,2,2)
+        obs = torch.cat([image_features, agent_pos],dim=-1)     
+        print(obs.shape)                                                             # (64,2,514)
+        noised_action = torch.randn((batch, pred_horizon, action_dim))
+        print(noised_action.shape)                                                   # (64,16,2)
+        diffusion_iter = torch.arange(64)
+        print(diffusion_iter)                                                        
+        print(diffusion_iter.shape)                                                  # (64,)
 
         # the noise prediction network
         # takes noisy action, diffusion iteration and observation as input
         # predicts the noise added to action
-        noise = nets['noise_pred_net'](
+        noise = noise_pred_net(
             sample=noised_action,
             timestep=diffusion_iter,
             global_cond=obs.flatten(start_dim=1))
-
-        # illustration of removing noise
-        # the actual noise removal is performed by NoiseScheduler
-        # and is dependent on the diffusion noise schedule
-        denoised_action = noised_action - noise
-
-    # for this demo, we use DDPMScheduler with 100 diffusion iterations
-    num_diffusion_iters = 100
-    noise_scheduler = DDPMScheduler(
-        num_train_timesteps=num_diffusion_iters,
-        # the choise of beta schedule has big impact on performance
-        # we found squared cosine works the best
-        beta_schedule='squaredcos_cap_v2',
-        # clip output to [-1,1] to improve stability
-        clip_sample=True,
-        # our network predicts noise (instead of denoised action)
-        prediction_type='epsilon'
-    )
+        print(noise.shape)                                                           # (64,16,2)

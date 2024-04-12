@@ -1,7 +1,8 @@
 # local file import
-from pushTimageEnv import PushTImageEnv
-from pushTdataset import PushTImageDataset, gdown
-from network import get_resnet, replace_bn_with_gn, ConditionalUnet1D
+from env.pushTimageEnv import PushTImageEnv
+from env.pushTdataset import PushTImageDataset, gdown
+from vision_Encoder import get_resnet, replace_bn_with_gn
+from network_UNet import ConditionalUnet1D
 # diffusion policy import
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from diffusers.training_utils import EMAModel
@@ -174,12 +175,12 @@ with tqdm(range(num_epochs), desc='Epoch') as tglobal:
 
                 # optimize
                 loss.backward()
-                print("loss.backward()")
+                # print("loss.backward()")
                 if global_train_step % gradient_accumulate_every == 0:
                     optimizer.step()
                     optimizer.zero_grad()
                     lr_scheduler.step()
-                    print("optimizer.step()")
+                    # print("optimizer.step()")
 
                 # update Exponential Moving Average of the model weights
                 ema.step(nets.parameters())
