@@ -13,6 +13,7 @@ import torch.nn as nn
 import numpy as np
 from tqdm.auto import tqdm
 import os
+import wandb
 
 
 
@@ -112,6 +113,7 @@ lr_scheduler = get_scheduler(
     last_epoch=global_train_step-1
 )
 
+wandb.init(project="trainDP_UNet")
 with tqdm(range(num_epochs), desc='Epoch') as tglobal:
     # epoch loop
     for epoch_idx in tglobal:
@@ -179,8 +181,10 @@ with tqdm(range(num_epochs), desc='Epoch') as tglobal:
                 loss_cpu = loss.item()
                 epoch_loss.append(loss_cpu)
                 tepoch.set_postfix(loss=loss_cpu)
+        wandb.log({'epoch':epoch_idx,'loss':np.mean(epoch_loss)})
         tglobal.set_postfix(loss=np.mean(epoch_loss))
 
+wandb.finish()
 # Weights of the EMA model
 # is used for inference
 ema_nets = nets

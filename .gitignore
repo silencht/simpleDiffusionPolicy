@@ -5,3 +5,4 @@ pusht_vision_100ep.ckpt
 simpledp.ckpt
 *.mp4
 *.ckpt
+wandb
