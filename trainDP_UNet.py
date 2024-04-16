@@ -1,7 +1,7 @@
 # local file import
 from env.pushTimageEnv import PushTImageEnv
 from env.pushTdataset import PushTImageDataset, gdown
-from vision_Encoder import get_resnet, replace_bn_with_gn
+from vision_Encoder import get_resnet, replace_bn_with_gn, replace_submodules
 from network_UNet import ConditionalUnet1D
 # diffusion policy import
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
@@ -14,20 +14,6 @@ import numpy as np
 from tqdm.auto import tqdm
 import os
 
-
-## Create Env
-# Standard Gym Env (0.21.0 API)
-# 0. create env object
-env = PushTImageEnv()
-# 1. seed env for initial state.
-# Seed 0-200 are used for the demonstration dataset.
-env.seed(1000)
-# 2. must reset before use
-obs, info = env.reset()
-# 3. 2D positional action space [0,512]
-action = env.action_space.sample()
-# 4. Standard gym step method
-obs, reward, terminated, truncated, info = env.step(action)
 
 
 ## Dataset

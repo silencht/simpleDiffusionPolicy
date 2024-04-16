@@ -1,6 +1,6 @@
 from env.pushTimageEnv import PushTImageEnv
 from env.pushTdataset import PushTImageDataset, normalize_data , unnormalize_data
-from vision_Encoder import get_resnet, replace_bn_with_gn
+from vision_Encoder import get_robomimic_resnet, replace_bn_with_gn
 from network_Transformer import TransformerForDiffusion
 
 import numpy as np
@@ -56,7 +56,7 @@ dataloader = torch.utils.data.DataLoader(
 # if you have multiple camera views, use seperate encoder weights for each view.
 # IMPORTANT! replace all BatchNorm with GroupNorm to work with EMA
 # performance will tank if you forget to do this!
-vision_encoder = get_resnet('resnet18')
+vision_encoder = get_robomimic_resnet(feature_dimension=512)
 vision_encoder = replace_bn_with_gn(vision_encoder)
 
 # ResNet18 has output dim of 512, agent_pos is 2 dimensional. observation feature has 514 dims in total per step
@@ -148,7 +148,7 @@ with tqdm(total=max_steps, desc="Eval PushTImageEnv") as pbar:
         # infer action
         with torch.no_grad():
             # get image features
-            image_features = ema_nets['vision_encoder'](nimages)                      # (2,512)
+            image_features = ema_nets['vision_encoder']({"camera":nimages,}) # (2,512)
 
             # concat with low-dim observations
             obs_cond = torch.cat([image_features, nagent_poses], dim=-1).unsqueeze(0) # (1,2,514)

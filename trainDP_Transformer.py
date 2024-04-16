@@ -1,7 +1,7 @@
 # local file import
 from env.pushTimageEnv import PushTImageEnv
 from env.pushTdataset import PushTImageDataset, gdown
-from vision_Encoder import get_resnet, replace_bn_with_gn
+from vision_Encoder import get_robomimic_resnet, replace_bn_with_gn
 from network_Transformer import TransformerForDiffusion
 # diffusion policy import
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
@@ -13,21 +13,6 @@ import torch.nn as nn
 import numpy as np
 from tqdm.auto import tqdm
 import os
-
-
-## Create Env
-# Standard Gym Env (0.21.0 API)
-# 0. create env object
-env = PushTImageEnv()
-# 1. seed env for initial state.
-# Seed 0-200 are used for the demonstration dataset.
-env.seed(1000)
-# 2. must reset before use
-obs, info = env.reset()
-# 3. 2D positional action space [0,512]
-action = env.action_space.sample()
-# 4. Standard gym step method
-obs, reward, terminated, truncated, info = env.step(action)
 
 
 ## Dataset
@@ -46,17 +31,17 @@ action_horizon = 8                 #此为论文中的执行步数 T_{a}
 gradient_accumulate_every = 1      #累计梯度机制，可节省训练过程中显存（可参考diffusion policy原始仓库该变量及相关博客，例 https://zhuanlan.zhihu.com/p/454876670）
 global_train_step = 0              #与gradient_accumulate_every一起使用，记录训练步数
 # create dataset from file
-dataset = PushTImageDataset(       #共24208条数据。一共25650条 减去 204组演示数据 乘以 一组中(action_horizon-1=7)不填充的数据量 等于 24208条可用
+dataset = PushTImageDataset(       #共24208条数据。一共6450条 减去 204组演示数据 乘以 一组中(action_horizon-1=7)不填充的数据量 等于 24208条可用
     dataset_path=dataset_path,
     pred_horizon=pred_horizon,
     obs_horizon=obs_horizon,
     action_horizon=action_horizon
 )
 # create dataloader
-dataloader = torch.utils.data.DataLoader( #批处理后，共24208/256=95组数据
+dataloader = torch.utils.data.DataLoader( #批处理后，共24208/64=379组数据
     dataset,
-    batch_size=256,
-    num_workers=1,
+    batch_size=64,
+    num_workers=8,
     shuffle=True,
     # accelerate cpu-gpu transfer
     pin_memory=True,
@@ -66,7 +51,7 @@ dataloader = torch.utils.data.DataLoader( #批处理后，共24208/256=95组数�
 
 
 # construc ResNet18 encoder
-vision_encoder = get_resnet('resnet18')
+vision_encoder = get_robomimic_resnet(feature_dimension=512)
 # IMPORTANT! replace all BatchNorm with GroupNorm to work with EMA, performance will tank if you forget to do this!
 vision_encoder = replace_bn_with_gn(vision_encoder)
 # ResNet18 has output dim of 512
@@ -113,7 +98,7 @@ device = torch.device('cuda')
 _ = nets.to(device)
 
 ## Training
-num_epochs = 800
+num_epochs = 3050
 # Exponential Moving Average, accelerates training and improves stability, holds a copy of the model weights
 ema = EMAModel(
     parameters=nets.parameters(),
@@ -132,6 +117,7 @@ lr_scheduler = get_scheduler(
 
 with tqdm(range(num_epochs), desc='Epoch') as tglobal:
     # epoch loop
+    print_loss = list()
     for epoch_idx in tglobal:
         epoch_loss = list()
         # batch loop
@@ -139,38 +125,38 @@ with tqdm(range(num_epochs), desc='Epoch') as tglobal:
             for batch_idx, nbatch in enumerate(tepoch):
                 # data normalized in dataset, device transfer
                 # 注: [:,:obs_horizon] 实际想做 pushTdataset.py 中 nsample['image'] = nsample['image'][:self.obs_horizon,:]做的事情，所以此处作用重复
-                nimage = nbatch['image'][:,:obs_horizon].to(device)            # [256, 2, 3, 96, 96]
-                nagent_pos = nbatch['agent_pos'][:,:obs_horizon].to(device)    # [256, 2, 2]
-                naction = nbatch['action'].to(device)                          # [256, 16, 2]
-                B = nagent_pos.shape[0]                                        # 256
+                nimage = nbatch['image'][:,:obs_horizon].to(device)            # [64, 2, 3, 96, 96]
+                nagent_pos = nbatch['agent_pos'][:,:obs_horizon].to(device)    # [64, 2, 2]
+                naction = nbatch['action'].to(device)                          # [64, 16, 2]
+                B = nagent_pos.shape[0]                                        # 64
 
                 # encoder vision features, input var 'nimage.flatten(end_dim=1).shape' is [128,3,96,96]
-                image_features = nets['vision_encoder'](nimage.flatten(end_dim=1)) # [128,512]
-                # reshape input var 'nimage.shape[:2]' is [256,2]
-                image_features = image_features.reshape(*nimage.shape[:2],-1)      # [256,2,512]
+                image_features = nets['vision_encoder']({"camera":nimage.flatten(end_dim=1),}) # [128,512]
+                # reshape input var 'nimage.shape[:2]' is [64,2]
+                image_features = image_features.reshape(*nimage.shape[:2],-1)      # [64,2,512]
                 # (B,obs_horizon,D)
 
                 # concatenate vision feature and low-dim obs
-                obs_cond = torch.cat([image_features, nagent_pos], dim=-1)         # [256,2,514]
+                obs_cond = torch.cat([image_features, nagent_pos], dim=-1)         # [64,2,514]
                 # (B, obs_horizon * obs_dim)
 
                 # sample noise to add to actions
-                noise = torch.randn(naction.shape, device=device)                  # [256, 16, 2]
+                noise = torch.randn(naction.shape, device=device)                  # [64, 16, 2]
 
                 # sample a diffusion iteration for each data point
                 timesteps = torch.randint(
                     0, noise_scheduler.config.num_train_timesteps,
                     (B,), device=device
-                ).long()                                                           # [256]
+                ).long()                                                           # [64]
 
                 # add noise to the clean images (not actions??) according to the noise magnitude at each diffusion iteration
                 # (this is the forward diffusion process)
                 noisy_actions = noise_scheduler.add_noise(
-                    naction, noise, timesteps)                                     # [256, 16, 2]
+                    naction, noise, timesteps)                                     # [64, 16, 2]
 
                 # predict the noise residual (with condion obs_cond)
                 noise_pred = noise_pred_net(
-                    noisy_actions, timesteps, global_cond=obs_cond)                # [256, 16, 2]
+                    noisy_actions, timesteps, global_cond=obs_cond)                # [64, 16, 2]
 
                 # L2 loss
                 raw_loss = nn.functional.mse_loss(noise_pred, noise)
@@ -195,7 +181,8 @@ with tqdm(range(num_epochs), desc='Epoch') as tglobal:
                 epoch_loss.append(loss_cpu)
                 tepoch.set_postfix(loss=loss_cpu)
         tglobal.set_postfix(loss=np.mean(epoch_loss))
-
+        print_loss.append(np.mean(epoch_loss))
+print(print_loss)
 # Weights of the EMA model
 # is used for inference
 ema_nets = nets
@@ -204,4 +191,4 @@ print("Train End.")
 
 # 保存参数模型到本地检查点文件
 torch.save(ema_nets.state_dict(), "simpledp_transformer.ckpt")
-print("Model parameters saved to 'simpledp.ckpt'.")
+print("Model parameters saved to 'simpledp_transformer.ckpt'.")

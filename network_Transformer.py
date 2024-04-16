@@ -31,8 +31,19 @@ class TransformerForDiffusion(ModuleAttrMixin):
             causal_attn: bool=True,   # 因果注意力掩码
             time_as_cond: bool=True,  # timestep是否作为条件
             obs_as_cond: bool=False,  # 观测是否作为条件
-            n_cond_layers: int = 0    # TransformerEncoderLayer层数
+            n_cond_layers: int = 0    # TransformerEncoderLayer层数, >0: use transformer encoder for cond, otherwise use MLP
         ) -> None:
+        """
+            from paper: 1. Actions with noise A^{k}_{t} are passed in as input tokens for the transformer decoder blocks(self.input_emb), 
+                with the sinusoidal embedding for diffusion iteration k prepended as the first token(self.time_emb).
+                2. The observation O_{t} is transformed into observation embedding sequence by a shared MLP, which is then passed 
+                into the transformer decoder stack as input features(self.cond_obs_emb + self.encoder).
+                3. The "gradient" ε_{θ} (O_{t} , A^{k}_{t} , k) is predicted by each corresponding output token of the decoder stack.
+                4. In our state-based experiments, most of the best-performing policies are achieved with the transformer backbone, 
+                espe-cially when the task complexity and rate of action change are high.
+                5. However, we found the transformer to be more sensitive to hyperparameters. could potentially be resolved in the 
+                future with improved transformer training techniques or increased data scale.
+        """
         super().__init__()
 
         # compute number of tokens for main trunk and condition encoder
